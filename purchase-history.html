@@ -11,17 +11,22 @@
     th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
     th { background: #eee; }
     #status { margin-top: 10px; color: red; }
+    #controls { margin-bottom: 20px; }
   </style>
 </head>
 <body>
   <h1>Roblox Purchase History Viewer</h1>
-  <label>User ID:</label><br>
-  <input type="text" id="userId" placeholder="Enter your Roblox userId"><br>
   
-  <label>.ROBLOSECURITY Cookie:</label><br>
-  <input type="password" id="cookie" placeholder="Paste your cookie here"><br>
-  
-  <button onclick="loadPurchases()">Load Purchase History</button>
+  <div id="controls">
+    <label>Username:</label><br>
+    <input type="text" id="username" placeholder="Enter your Roblox username"><br>
+    
+    <label>.ROBLOSECURITY Cookie:</label><br>
+    <input type="password" id="cookie" placeholder="Paste your cookie here"><br>
+    
+    <button onclick="start()">Load Purchase History</button>
+    <button onclick="downloadCSV()">Download CSV</button>
+  </div>
   
   <div id="status"></div>
   
@@ -38,36 +43,59 @@
   </table>
 
   <script>
-    async function loadPurchases(cursor=null) {
-      const userId = document.getElementById("userId").value.trim();
+    let allData = [];
+
+    async function getUserId(username) {
+      const res = await fetch(`https://api.roblox.com/users/get-by-username?username=${username}`);
+      if (!res.ok) throw new Error("Failed to fetch UserId");
+      const data = await res.json();
+      if (!data.Id) throw new Error("Invalid username");
+      return data.Id;
+    }
+
+    async function start() {
+      const username = document.getElementById("username").value.trim();
       const cookie = document.getElementById("cookie").value.trim();
+      const status = document.getElementById("status");
+      const tbody = document.querySelector("#results tbody");
+      tbody.innerHTML = "";
+      allData = [];
+
+      if (!username || !cookie) {
+        status.innerText = "❌ Please enter both username and cookie.";
+        return;
+      }
+
+      try {
+        status.innerText = "Fetching userId...";
+        const userId = await getUserId(username);
+        status.innerText = `UserId: ${userId} — loading purchases...`;
+        await loadPurchases(userId, cookie);
+      } catch (err) {
+        status.innerText = "❌ Error: " + err.message;
+      }
+    }
+
+    async function loadPurchases(userId, cookie, cursor=null) {
       const status = document.getElementById("status");
       const results = document.getElementById("results");
       const tbody = results.querySelector("tbody");
 
-      if (!userId || !cookie) {
-        status.innerText = "❌ Please enter both UserId and Cookie.";
-        return;
-      }
-
-      status.innerText = "Loading...";
-      
       try {
         const url = `https://economy.roblox.com/v2/users/${userId}/transactions?transactionType=Purchase${cursor ? "&cursor="+cursor : ""}`;
         const res = await fetch(url, {
-          headers: {
-            "Cookie": `.ROBLOSECURITY=${cookie}`
-          },
+          headers: { "Cookie": `.ROBLOSECURITY=${cookie}` },
           credentials: "include"
         });
-        
+
         if (!res.ok) {
-          status.innerText = "❌ Failed to fetch (check UserId and cookie).";
+          status.innerText = "❌ Failed to fetch (check username and cookie).";
           return;
         }
-        
+
         const data = await res.json();
         results.style.display = "table";
+
         data.data.forEach(tx => {
           const row = document.createElement("tr");
           row.innerHTML = `
@@ -77,19 +105,41 @@
             <td>${tx.currency.amount}</td>
           `;
           tbody.appendChild(row);
+          allData.push({
+            Date: new Date(tx.created).toLocaleString(),
+            Item: tx.details ? tx.details.name : "Unknown",
+            Type: tx.type,
+            Price: tx.currency.amount
+          });
         });
-        
+
         if (data.nextPageCursor) {
-          const moreBtn = document.createElement("button");
-          moreBtn.innerText = "Load More";
-          moreBtn.onclick = () => { moreBtn.remove(); loadPurchases(data.nextPageCursor); };
-          document.body.appendChild(moreBtn);
+          status.innerHTML = `Loaded ${allData.length} purchases...`;
+          await loadPurchases(userId, cookie, data.nextPageCursor);
         } else {
-          status.innerText = "✅ Finished loading.";
+          status.innerText = `✅ Finished. Total purchases: ${allData.length}`;
         }
       } catch (err) {
         status.innerText = "❌ Error: " + err.message;
       }
+    }
+
+    function downloadCSV() {
+      if (allData.length === 0) {
+        alert("No data to download.");
+        return;
+      }
+      let csv = "Date,Item,Type,Price\n";
+      allData.forEach(r => {
+        csv += `"${r.Date}","${r.Item}","${r.Type}",${r.Price}\n`;
+      });
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "purchase_history.csv";
+      a.click();
+      URL.revokeObjectURL(url);
     }
   </script>
 </body>
